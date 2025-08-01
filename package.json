@@ -1,20 +1,34 @@
 {
-  "name": "json-mcp-v2",
+  "name": "json-mcp-server",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "build/index.js",
   "type": "module",
+  "bin": {
+    "json-mcp-server": "./build/index.js"
+  },
   "scripts": {
     "build": "tsc && chmod 755 build/index.js",
-    "start": "node /Users/kevin/Documents/Kevin/json-mcp-v2/build/index.js",
-    "inspect": "npx @modelcontextprotocol/inspector node /Users/kevin/Documents/Kevin/json-mcp-v2/build/index.js"
+    "start": "node build/index.js",
+    "inspect": "npx @modelcontextprotocol/inspector node build/index.js"
   },
   "files": [
-    "build"
+    "build",
+    "src",
+    "README.md"
   ],
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "json",
+    "schema",
+    "typescript",
+    "quicktype",
+    "json-filter",
+    "claude"
+  ],
+  "author": "Kevin",
+  "license": "MIT",
+  "description": "MCP server providing JSON schema generation and filtering tools using quicktype",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.17.1",
     "quicktype-core": "^23.2.6",
