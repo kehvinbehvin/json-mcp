@@ -54,7 +54,7 @@ type JsonFilterResult = {
 // Create server instance
 const server = new McpServer({
   name: "json-mcp",
-  version: "1.0.0",
+  version: "1.0.1",
   capabilities: {
     resources: {},
     tools: {},
