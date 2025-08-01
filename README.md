@@ -1,4 +1,4 @@
-# JSON MCP Server
+# JSON MCP Filter
 
 A Model Context Protocol (MCP) server that provides JSON schema generation and filtering tools. This server uses [quicktype](https://github.com/quicktype/quicktype) to convert JSON samples into TypeScript type definitions and offers JSON data filtering capabilities.
 
@@ -49,10 +49,23 @@ Extracts specific fields from JSON data using a shape definition.
 
 ## Installation
 
+### Quick Start (Recommended)
+
+```bash
+# Using npx (no installation required)
+npx json-mcp-filter@latest
+
+# Or install globally
+npm install -g json-mcp-filter@latest
+json-mcp-server
+```
+
+### From Source
+
 1. Clone this repository:
 ```bash
 git clone <repository-url>
-cd json-mcp-server
+cd json-mcp-filter
 ```
 
 2. Install dependencies:
@@ -73,9 +86,9 @@ Add this server to your Claude Desktop configuration file:
 ```json
 {
   "mcpServers": {
-    "json-mcp-server": {
+    "json-mcp-filter": {
       "command": "node",
-      "args": ["/path/to/json-mcp-server/build/index.js"]
+      "args": ["/path/to/json-mcp-filter/build/index.js"]
     }
   }
 }
@@ -86,24 +99,24 @@ Add this server to your Claude Desktop configuration file:
 Add this server to your Claude Code MCP settings:
 
 Add a new server with:
-   - **Name**: `json-mcp-server`
+   - **Name**: `json-mcp-filter`
    - **Command**: `node`
-   - **Args**: `["/path/to/json-mcp-server/build/index.js"]`
+   - **Args**: `["/path/to/json-mcp-filter/build/index.js"]`
 
 
 Or, use the `npx` method for easier setup:
 ```json
 {
   "mcpServers": {
-    "json-mcp-server": {
+    "json-mcp-filter": {
       "command": "npx",
-      "args": ["-y", "json-mcp-server"]
+      "args": ["-y", "json-mcp-filter@latest"]
     }
   }
 }
 ```
 Or
-claude mcp add json-parser node /path/to/json-mcp-server/build/index.js
+claude mcp add json-mcp-filter node /path/to/json-mcp-filter/build/index.js
 
 ## Development
 
