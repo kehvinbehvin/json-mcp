@@ -24,9 +24,11 @@ The project follows a simple MCP server architecture:
 - **src/index.ts** - Main entry point that sets up the MCP server with stdio transport
 - **McpServer** - Server instance configured with tools capability
 - **quicktypeJSON function** - Core utility that converts JSON samples to TypeScript interfaces using quicktype-core
+- **extractWithShape function** - Core utility that filters JSON data based on a shape definition
 
 ### Tools
 - **json_schema** - Tool that reads JSON files and generates TypeScript type definitions
+- **json_filter** - Tool that filters JSON data using a shape object to extract only specified fields
 
 ### Dependencies
 - `@modelcontextprotocol/sdk` - MCP framework for building context-aware tools

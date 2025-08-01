@@ -17,7 +17,14 @@ const JsonSchemaInputSchema = z.object({
   filePath: z.string().min(1, "File path is required")
 });
 
+const JsonFilterInputSchema = z.object({
+  filePath: z.string().min(1, "File path is required"),
+  shape: z.any().describe("Shape object defining what to extract")
+});
+
 type JsonSchemaInput = z.infer<typeof JsonSchemaInputSchema>;
+type JsonFilterInput = z.infer<typeof JsonFilterInputSchema>;
+type Shape = { [key: string]: true | Shape };
 
 // Define error types
 interface JsonSchemaError {
@@ -30,6 +37,14 @@ interface JsonSchemaError {
 type JsonSchemaResult = {
   readonly success: true;
   readonly schema: string;
+} | {
+  readonly success: false;
+  readonly error: JsonSchemaError;
+};
+
+type JsonFilterResult = {
+  readonly success: true;
+  readonly filteredData: any;
 } | {
   readonly success: false;
   readonly error: JsonSchemaError;
@@ -64,6 +79,26 @@ async function quicktypeJSON(
     inputData,
     lang: targetLanguage
   });
+}
+
+/**
+ * Extract data from object based on shape definition
+ */
+function extractWithShape(data: any, shape: Shape): any {
+  if (Array.isArray(data)) {
+    return data.map(item => extractWithShape(item, shape));
+  }
+
+  const result: any = {};
+  for (const key in shape) {
+    const rule = shape[key];
+    if (rule === true) {
+      result[key] = data[key];
+    } else if (typeof rule === 'object' && data[key] !== undefined) {
+      result[key] = extractWithShape(data[key], rule);
+    }
+  }
+  return result;
 }
 
 /**
@@ -137,6 +172,75 @@ async function processJsonSchema(input: JsonSchemaInput): Promise<JsonSchemaResu
   }
 }
 
+/**
+ * Validates and processes JSON filter request
+ */
+async function processJsonFilter(input: JsonFilterInput): Promise<JsonFilterResult> {
+  try {
+    // Resolve and validate file path
+    const resolvedPath = resolve(input.filePath);
+    
+    // Check if file exists and read it
+    let jsonContent: string;
+    try {
+      jsonContent = await fs.readFile(resolvedPath, 'utf-8');
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          type: 'file_not_found',
+          message: `File not found: ${resolvedPath}`,
+          details: error
+        }
+      };
+    }
+
+    // Parse JSON
+    let parsedData: any;
+    try {
+      parsedData = JSON.parse(jsonContent);
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          type: 'invalid_json',
+          message: 'Invalid JSON format in file',
+          details: error
+        }
+      };
+    }
+
+    // Apply shape filter
+    try {
+      const filteredData = extractWithShape(parsedData, input.shape);
+      console.error(filteredData)
+      
+      return {
+        success: true,
+        filteredData
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          type: 'validation_error',
+          message: 'Failed to apply shape filter',
+          details: error
+        }
+      };
+    }
+  } catch (error) {
+    return {
+      success: false,
+      error: {
+        type: 'validation_error',
+        message: 'Unexpected error during processing',
+        details: error
+      }
+    };
+  }
+}
+
 // Register JSON schema tool
 server.tool(
     "json_schema",
@@ -157,6 +261,77 @@ server.tool(
                         {
                             type: "text",
                             text: result.schema
+                        }
+                    ]
+                };
+            } else {
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: `Error: ${result.error.message}`
+                        }
+                    ],
+                    isError: true
+                };
+            }
+        } catch (error) {
+            return {
+                content: [
+                    {
+                        type: "text",
+                        text: `Validation error: ${error instanceof Error ? error.message : String(error)}`
+                    }
+                ],
+                isError: true
+            };
+        }
+    }
+);
+
+server.tool(
+    "json_filter",
+    "Filter JSON data using a shape object to extract only the fields you want. Provide filePath and shape parameters.",
+    {
+        filePath: z.string().describe("Path to the JSON file to filter"),
+        shape: z.unknown().describe("Shape object (Formatted as valid json) defining what fields to extract (true for include, nested object for nested extraction)")
+    },
+    async ({ filePath, shape }) => {
+        try {
+            // If shape is a string, parse it as JSON
+            let parsedShape = shape;
+            if (typeof shape === 'string') {
+                try {
+                    parsedShape = JSON.parse(shape);
+                    console.error(parsedShape)
+                } catch (e) {
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: `Error: Invalid JSON in shape parameter: ${e instanceof Error ? e.message : String(e)}`
+                            }
+                        ],
+                        isError: true
+                    };
+                }
+            }
+
+            
+
+            const validatedInput = JsonFilterInputSchema.parse({
+                filePath,
+                shape: parsedShape
+            });
+            
+            const result = await processJsonFilter(validatedInput);
+            
+            if (result.success) {
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify(result.filteredData, null, 2)
                         }
                     ]
                 };
