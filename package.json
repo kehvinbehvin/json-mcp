@@ -1,6 +1,13 @@
 {
-  "name": "json-mcp-filter",
+  "name": "@kehvinbehvin/json-mcp-filter",
   "version": "1.0.1",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kehvinbehvin/json-mcp-filter.git"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
   "main": "build/index.js",
   "type": "module",
   "bin": {
