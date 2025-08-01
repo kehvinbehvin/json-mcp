@@ -2,6 +2,8 @@
 
 A Model Context Protocol (MCP) server that provides JSON schema generation and filtering tools. This server uses [quicktype](https://github.com/quicktype/quicktype) to convert JSON samples into TypeScript type definitions and offers JSON data filtering capabilities.
 
+Particulary helpful for JSON files that are on the larger side which contains data you don't want included in your LLM context. 
+
 ## Features
 
 - **JSON Schema Generation**: Convert JSON files into TypeScript type definitions using quicktype-core
