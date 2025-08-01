@@ -213,7 +213,6 @@ async function processJsonFilter(input: JsonFilterInput): Promise<JsonFilterResu
     // Apply shape filter
     try {
       const filteredData = extractWithShape(parsedData, input.shape);
-      console.error(filteredData)
       
       return {
         success: true,
@@ -294,7 +293,36 @@ server.tool(
     "Filter JSON data using a shape object to extract only the fields you want. Provide filePath and shape parameters.",
     {
         filePath: z.string().describe("Path to the JSON file to filter"),
-        shape: z.unknown().describe("Shape object (Formatted as valid json) defining what fields to extract (true for include, nested object for nested extraction)")
+        shape: z.unknown().describe(`Shape object (formatted as valid JSON) defining what fields to extract. Use 'true' to include a field, or nested objects for deep extraction.
+
+Examples:
+1. Extract single field: {"type": true}
+2. Extract multiple fields: {"type": true, "version": true, "source": true}
+3. Extract nested fields: {"appState": {"gridSize": true, "viewBackgroundColor": true}}
+4. Extract from arrays: {"elements": {"type": true, "x": true, "y": true}} - applies to each array item
+5. Complex nested extraction: {
+   "type": true,
+   "version": true,
+   "appState": {
+     "gridSize": true,
+     "viewBackgroundColor": true
+   },
+   "elements": {
+     "type": true,
+     "text": true,
+     "x": true,
+     "y": true,
+     "boundElements": {
+       "type": true,
+       "id": true
+     }
+   }
+}
+
+Note: 
+- Arrays are automatically handled - the shape is applied to each item in the array.
+- Use json_schema tool to analyse the JSON file schema before using this tool.
+`)
     },
     async ({ filePath, shape }) => {
         try {
@@ -303,7 +331,6 @@ server.tool(
             if (typeof shape === 'string') {
                 try {
                     parsedShape = JSON.parse(shape);
-                    console.error(parsedShape)
                 } catch (e) {
                     return {
                         content: [
