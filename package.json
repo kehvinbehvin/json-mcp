@@ -1,5 +1,5 @@
 {
-  "name": "json-mcp-server",
+  "name": "json-mcp-filter",
   "version": "1.0.0",
   "main": "build/index.js",
   "type": "module",
