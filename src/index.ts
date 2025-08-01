@@ -78,7 +78,10 @@ async function quicktypeJSON(
 
   return await quicktype({
     inputData,
-    lang: targetLanguage
+    lang: targetLanguage,
+    rendererOptions: {
+        "just-types": true
+    }
   });
 }
 
