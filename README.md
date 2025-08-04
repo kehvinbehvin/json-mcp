@@ -60,7 +60,44 @@ Extracts specific fields from JSON data using a shape definition. Perfect for fi
 - `filePath`: Local file path or HTTP/HTTPS URL to the JSON data
 - `shape`: Shape object defining which fields to extract
 
+### `json_dry_run`
+Naive size breakdown of JSON data using a shape object to determine granularity. Returns size information in bytes for each specified field, mirroring the shape structure but with size values instead of data.
+
+**Parameters:**
+- `filePath`: Local file path or HTTP/HTTPS URL to the JSON data
+- `shape`: Shape object defining what to analyze for size
+
+**Use Cases:**
+- Determine data size before filtering large JSON files
+- Optimize API response filtering by understanding field sizes
+- Analyze storage requirements for specific data structures
+- Compare relative sizes of different JSON sections
+
 **Examples:**
+
+*Analyze data size:*
+```bash
+json_dry_run({
+  filePath: "https://api.example.com/users",
+  shape: {"name": true, "email": true, "posts": {"title": true}}
+})
+```
+
+**Sample Output:**
+```
+Total file size: 245.8 KB (251,847 bytes)
+
+Size breakdown:
+{
+  "name": 1205,
+  "email": 1834, 
+  "posts": {
+    "title": 5692
+  }
+}
+```
+
+## `json_filter` Examples
 
 *Filter API response:*
 ```bash
@@ -253,6 +290,57 @@ The server includes comprehensive error handling for:
 - Invalid URL format errors
 
 All errors include actionable messages and debugging information to help resolve issues quickly.
+
+## Performance & File Size Handling
+
+### Expected Performance
+
+The JSON MCP tools are optimized for real-world JSON processing with the following performance characteristics:
+
+| File Size | Processing Time |
+|-----------|-----------------|
+| < 100 KB | < 10ms |
+| 100 KB - 1 MB | 10ms - 100ms |
+| 1 MB - 10 MB | 100ms - 1s |
+| 10 MB - 50 MB | 1s - 5s |
+| > 50 MB | Blocked |
+
+### Built-in File Size Protection
+
+**Automatic Size Limits:**
+- **50 MB maximum** for both local files and remote URLs
+- **Pre-download checking** via HTTP Content-Length headers
+- **Post-download validation** for responses without size headers
+
+**Size Limit Enforcement:**
+
+*Local Files:*
+```bash
+# File size checked before reading
+json_schema({ filePath: "./huge-file.json" })
+# → Error: File too large (75MB). This tool is optimized for JSON files under 50MB.
+```
+
+*Remote URLs:*
+```bash  
+# Content-Length header checked before download
+json_filter({ filePath: "https://api.example.com/massive-dataset" })
+# → Error: Response too large (120MB). This tool is optimized for JSON files under 50MB.
+```
+
+**Size Information:**
+- All tools display actual file sizes in responses
+- `json_schema` shows file size at the top of generated schemas
+- `json_dry_run` provides detailed size breakdowns for optimization
+- Clear error messages show actual vs. maximum allowed sizes
+
+### Performance Recommendations
+
+**For Best Performance:**
+- Use `json_dry_run` first to analyze large files
+- Filter data with `json_filter` before generating schemas
+- Limit shape specifications to essential fields only
+- Process large datasets in smaller chunks when possible
 
 ## Remote Data Capabilities
 

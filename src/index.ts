@@ -31,8 +31,17 @@ const JsonFilterInputSchema = z.object({
   shape: z.any().describe("Shape object defining what to extract")
 });
 
+const JsonDryRunInputSchema = z.object({
+  filePath: z.string().min(1, "File path or HTTP/HTTPS URL is required").refine(
+    (val) => val.length > 0 && (val.startsWith('./') || val.startsWith('/') || val.startsWith('http://') || val.startsWith('https://') || !val.includes('/')),
+    "Must be a valid file path or HTTP/HTTPS URL"
+  ),
+  shape: z.any().describe("Shape object defining what to analyze")
+});
+
 type JsonSchemaInput = z.infer<typeof JsonSchemaInputSchema>;
 type JsonFilterInput = z.infer<typeof JsonFilterInputSchema>;
+type JsonDryRunInput = z.infer<typeof JsonDryRunInputSchema>;
 type Shape = { [key: string]: true | Shape };
 
 // Define error types (extended to support new ingestion strategies and edge cases)
@@ -55,6 +64,15 @@ type JsonSchemaResult = {
 type JsonFilterResult = {
   readonly success: true;
   readonly filteredData: any;
+} | {
+  readonly success: false;
+  readonly error: JsonSchemaError;
+};
+
+type JsonDryRunResult = {
+  readonly success: true;
+  readonly sizeBreakdown: any;
+  readonly totalSize: number;
 } | {
   readonly success: false;
   readonly error: JsonSchemaError;
@@ -115,6 +133,130 @@ function extractWithShape(data: any, shape: Shape): any {
     }
   }
   return result;
+}
+
+/**
+ * Calculate the size in bytes of any JSON value
+ */
+function calculateValueSize(value: any): number {
+  if (value === null) {
+    return new TextEncoder().encode('null').length; // 4 bytes for "null"
+  }
+  
+  if (value === undefined) {
+    // undefined values are omitted in JSON.stringify, so they have 0 size
+    return 0;
+  }
+  
+  if (typeof value === 'string') {
+    // Use JSON.stringify to handle escape characters properly
+    return new TextEncoder().encode(JSON.stringify(value)).length;
+  }
+  
+  if (typeof value === 'number') {
+    return new TextEncoder().encode(value.toString()).length;
+  }
+  
+  if (typeof value === 'boolean') {
+    return new TextEncoder().encode(value.toString()).length; // "true" = 4, "false" = 5
+  }
+  
+  if (Array.isArray(value)) {
+    // Calculate size of array including JSON formatting (brackets, commas)
+    let totalSize = 2; // Opening and closing brackets []
+    for (let i = 0; i < value.length; i++) {
+      totalSize += calculateValueSize(value[i]);
+      if (i < value.length - 1) {
+        totalSize += 1; // Comma separator
+      }
+    }
+    return totalSize;
+  }
+  
+  if (typeof value === 'object') {
+    // Calculate size of object including JSON formatting (braces, colons, commas, quotes)
+    let totalSize = 2; // Opening and closing braces {}
+    const entries = Object.entries(value).filter(([, val]) => val !== undefined);
+    for (let i = 0; i < entries.length; i++) {
+      const [key, val] = entries[i];
+      totalSize += new TextEncoder().encode(`"${key}"`).length; // Key with quotes
+      totalSize += 1; // Colon
+      totalSize += calculateValueSize(val); // Value
+      if (i < entries.length - 1) {
+        totalSize += 1; // Comma separator
+      }
+    }
+    return totalSize;
+  }
+  
+  return 0;
+}
+
+/**
+ * Calculate size breakdown based on shape definition
+ */
+function calculateSizeWithShape(data: any, shape: Shape): any {
+  if (Array.isArray(data)) {
+    // For arrays, apply the shape to each element and sum the results
+    let totalSizeBreakdown: any = {};
+    let isFirstElement = true;
+    
+    for (const item of data) {
+      const itemSizeBreakdown = calculateSizeWithShape(item, shape);
+      
+      if (isFirstElement) {
+        totalSizeBreakdown = itemSizeBreakdown;
+        isFirstElement = false;
+      } else {
+        // Sum up the sizes
+        totalSizeBreakdown = addSizeBreakdowns(totalSizeBreakdown, itemSizeBreakdown);
+      }
+    }
+    
+    return totalSizeBreakdown;
+  }
+
+  const result: any = {};
+  for (const key in shape) {
+    const rule = shape[key];
+    if (data[key] === undefined) {
+      // If the key doesn't exist in data, skip it or set to 0
+      continue;
+    }
+    
+    if (rule === true) {
+      // Calculate total size of this key's value
+      result[key] = calculateValueSize(data[key]);
+    } else if (typeof rule === 'object') {
+      // Recursively break down this key's value
+      result[key] = calculateSizeWithShape(data[key], rule);
+    }
+  }
+  return result;
+}
+
+/**
+ * Helper function to add two size breakdown objects together
+ */
+function addSizeBreakdowns(breakdown1: any, breakdown2: any): any {
+  if (typeof breakdown1 === 'number' && typeof breakdown2 === 'number') {
+    return breakdown1 + breakdown2;
+  }
+  
+  if (typeof breakdown1 === 'object' && typeof breakdown2 === 'object') {
+    const result: any = {};
+    const allKeys = new Set([...Object.keys(breakdown1), ...Object.keys(breakdown2)]);
+    
+    for (const key of allKeys) {
+      const val1 = breakdown1[key] || 0;
+      const val2 = breakdown2[key] || 0;
+      result[key] = addSizeBreakdowns(val1, val2);
+    }
+    return result;
+  }
+  
+  // Handle mismatched types - prefer the non-zero value
+  return breakdown1 || breakdown2 || 0;
 }
 
 /**
@@ -218,6 +360,71 @@ async function processJsonFilter(input: JsonFilterInput): Promise<JsonFilterResu
         error: {
           type: 'validation_error',
           message: 'Failed to apply shape filter',
+          details: error
+        }
+      };
+    }
+  } catch (error) {
+    return {
+      success: false,
+      error: {
+        type: 'validation_error',
+        message: 'Unexpected error during processing',
+        details: error
+      }
+    };
+  }
+}
+
+/**
+ * Validates and processes JSON dry run request
+ */
+async function processJsonDryRun(input: JsonDryRunInput): Promise<JsonDryRunResult> {
+  try {
+    // Use strategy pattern to ingest JSON content
+    const ingestionResult = await jsonIngestionContext.ingest(input.filePath);
+    
+    if (!ingestionResult.success) {
+      // Map strategy errors to existing error format for backward compatibility
+      return {
+        success: false,
+        error: ingestionResult.error
+      };
+    }
+
+    // Parse JSON
+    let parsedData: any;
+    try {
+      parsedData = JSON.parse(ingestionResult.content);
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          type: 'invalid_json',
+          message: 'Invalid JSON format in content',
+          details: error
+        }
+      };
+    }
+
+    // Calculate size breakdown based on shape
+    try {
+      const sizeBreakdown = calculateSizeWithShape(parsedData, input.shape);
+      
+      // Calculate total size of the entire parsed data
+      const totalSize = calculateValueSize(parsedData);
+      
+      return {
+        success: true,
+        sizeBreakdown,
+        totalSize
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          type: 'validation_error',
+          message: 'Failed to calculate size breakdown',
           details: error
         }
       };
@@ -362,6 +569,109 @@ Note:
                         {
                             type: "text",
                             text: JSON.stringify(result.filteredData, null, 2)
+                        }
+                    ]
+                };
+            } else {
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: `Error: ${result.error.message}`
+                        }
+                    ],
+                    isError: true
+                };
+            }
+        } catch (error) {
+            return {
+                content: [
+                    {
+                        type: "text",
+                        text: `Validation error: ${error instanceof Error ? error.message : String(error)}`
+                    }
+                ],
+                isError: true
+            };
+        }
+    }
+);
+
+server.tool(
+    "json_dry_run",
+    "Analyze the size breakdown of JSON data using a shape object to determine granularity. Returns size information in bytes for each specified field, mirroring the shape structure but with size values instead of data.",
+    {
+        filePath: z.string().describe("Path to the JSON file (local) or HTTP/HTTPS URL to analyze"),
+        shape: z.unknown().describe(`Shape object (formatted as valid JSON) defining what to analyze for size. Use 'true' to get total size of a field, or nested objects for detailed breakdown.
+
+Examples:
+1. Get size of single field: {"name": true}
+2. Get sizes of multiple fields: {"name": true, "email": true, "age": true}
+3. Get detailed breakdown: {"user": {"name": true, "profile": {"bio": true}}}
+4. Analyze arrays: {"posts": {"title": true, "content": true}} - gets total size of all matching elements
+5. Complex analysis: {
+   "metadata": true,
+   "users": {
+     "name": true,
+     "settings": {
+       "theme": true
+     }
+   },
+   "posts": {
+     "title": true,
+     "tags": true
+   }
+}
+
+Note: 
+- Returns size in bytes for each specified field
+- Output structure mirrors the shape but with size values
+- Array analysis returns total size of all matching elements
+- Use json_schema tool to understand the JSON structure first`)
+    },
+    async ({ filePath, shape }) => {
+        try {
+            // If shape is a string, parse it as JSON
+            let parsedShape = shape;
+            if (typeof shape === 'string') {
+                try {
+                    parsedShape = JSON.parse(shape);
+                } catch (e) {
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: `Error: Invalid JSON in shape parameter: ${e instanceof Error ? e.message : String(e)}`
+                            }
+                        ],
+                        isError: true
+                    };
+                }
+            }
+
+            const validatedInput = JsonDryRunInputSchema.parse({
+                filePath,
+                shape: parsedShape
+            });
+            
+            const result = await processJsonDryRun(validatedInput);
+            
+            if (result.success) {
+                // Format the response with total size and breakdown
+                const formatSize = (bytes: number): string => {
+                    if (bytes < 1024) return `${bytes} bytes`;
+                    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+                    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+                };
+
+                const header = `Total file size: ${formatSize(result.totalSize)} (${result.totalSize} bytes)\n\nSize breakdown:\n`;
+                const breakdown = JSON.stringify(result.sizeBreakdown, null, 2);
+                
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: header + breakdown
                         }
                     ]
                 };
