@@ -1,43 +1,89 @@
 # JSON MCP Filter
 
-A Model Context Protocol (MCP) server that provides JSON schema generation and filtering tools. This server uses [quicktype](https://github.com/quicktype/quicktype) to convert JSON samples into TypeScript type definitions and offers JSON data filtering capabilities.
+A Model Context Protocol (MCP) server that provides JSON schema generation and filtering tools for both local files and remote HTTP/HTTPS endpoints. This server uses [quicktype](https://github.com/quicktype/quicktype) to convert JSON samples into TypeScript type definitions and offers JSON data filtering capabilities.
 
-Particulary helpful for JSON files that are on the larger side which contains data you don't want included in your LLM context. 
+Particularly helpful for JSON files that are on the larger side which contains data you don't want included in your LLM context. Perfect for filtering API responses and extracting only relevant data.
 
 ## Features
 
 - **JSON Schema Generation**: Convert JSON files into TypeScript type definitions using quicktype-core
 - **JSON Filtering**: Extract specific fields from JSON data using shape-based filtering
+- **Remote File Support**: Fetch and process JSON from HTTP/HTTPS URLs and APIs
+- **Content Size Protection**: Automatic handling of large responses (up to 50MB)
 - **MCP Integration**: Seamlessly integrates with Claude Desktop and Claude Code
 - **Type Safety**: Built with TypeScript and includes comprehensive error handling
+- **Enhanced Error Messages**: Clear, actionable error messages for common issues
 
 ## Tools Provided
 
 ### `json_schema`
-Generates TypeScript type definitions from JSON files.
+Generates TypeScript type definitions from JSON files or remote URLs.
 
 **Parameters:**
-- `filePath`: Path to the JSON file to analyze
+- `filePath`: Local file path or HTTP/HTTPS URL to the JSON data
 
-**Example:**
+**Examples:**
+
+*Local file:*
+```bash
+json_schema({ filePath: "./data.json" })
+```
+
+*Remote JSON file:*
+```bash
+json_schema({ filePath: "https://api.example.com/config.json" })
+```
+
+*API endpoint:*
+```bash
+json_schema({ filePath: "https://jsonplaceholder.typicode.com/users" })
+```
+
+**Sample Input:**
 ```json
 {"name": "John", "age": 30, "city": "New York"}
 ```
-Generates TypeScript interfaces with proper typing.
+
+**Sample Output:**
+```typescript
+export interface GeneratedType {
+    name: string;
+    age:  number;
+    city: string;
+}
+```
 
 ### `json_filter`
-Extracts specific fields from JSON data using a shape definition.
+Extracts specific fields from JSON data using a shape definition. Perfect for filtering large API responses to include only relevant data.
 
 **Parameters:**
-- `filePath`: Path to the JSON file to filter
+- `filePath`: Local file path or HTTP/HTTPS URL to the JSON data
 - `shape`: Shape object defining which fields to extract
+
+**Examples:**
+
+*Filter API response:*
+```bash
+json_filter({ 
+  filePath: "https://jsonplaceholder.typicode.com/users",
+  shape: {"name": true, "email": true, "address": {"city": true}}
+})
+```
+
+*Filter local file:*
+```bash
+json_filter({
+  filePath: "./large-dataset.json", 
+  shape: {"users": {"id": true, "name": true}}
+})
+```
 
 **Shape Examples:**
 ```javascript
 // Extract single field
 {"name": true}
 
-// Extract multiple fields
+// Extract multiple fields  
 {"name": true, "age": true}
 
 // Extract nested fields
@@ -45,7 +91,39 @@ Extracts specific fields from JSON data using a shape definition.
 
 // Extract from arrays (applies to each item)
 {"users": {"name": true, "age": true}}
+
+// Complex nested extraction
+{
+  "results": {
+    "name": {"first": true, "last": true},
+    "email": true,
+    "location": {"city": true, "country": true}
+  }
+}
 ```
+
+## ⚠️ Security Disclaimer
+
+**IMPORTANT: Remote Data Fetching**
+
+This tool can fetch data from remote HTTP/HTTPS URLs. Users are responsible for:
+
+- **Verifying URLs before submission** - Ensure URLs point to legitimate, safe endpoints
+- **Data validation** - Review data sources and content before processing  
+- **Rate limiting** - Respect API rate limits and terms of service of external services
+- **Content safety** - This tool does not validate the safety or appropriateness of remote content
+
+**The repository maintainers are not responsible for:**
+- Data fetched from external URLs
+- Privacy implications of remote requests  
+- Malicious or inappropriate content from third-party sources
+- API abuse or violations of third-party terms of service
+
+**Recommendations:**
+- Only use trusted, public APIs and data sources
+- Verify URLs are legitimate before processing
+- Be cautious with internal/localhost URLs in shared environments
+- Review API documentation and terms of service before use
 
 ## Installation
 
@@ -138,16 +216,73 @@ This will start the server with the MCP inspector interface for interactive test
 
 ```
 src/
-  index.ts          # Main server implementation with tools
+  index.ts                    # Main server implementation with tools
+  strategies/                 # Strategy pattern for data ingestion
+    JsonIngestionStrategy.ts  # Abstract strategy interface
+    LocalFileStrategy.ts      # Local file system access
+    HttpJsonStrategy.ts       # HTTP/HTTPS URL fetching
+  context/
+    JsonIngestionContext.ts   # Strategy management and selection
+  types/
+    JsonIngestion.ts          # Shared type definitions
 test/
-  test.json         # Sample JSON file for testing
-build/              # Compiled TypeScript output
+  test.json                   # Sample JSON files for testing
+build/                        # Compiled TypeScript output
 ```
 
 ## Error Handling
 
-The server includes error handling for:
+The server includes comprehensive error handling for:
+
+### Local File Errors
 - File not found errors
 - Invalid JSON format
+- File permission issues
+
+### Remote URL Errors  
+- **Network errors** - Connection failures, timeouts
+- **Authentication errors** - 401/403 responses with guidance
+- **Server errors** - 500-series responses with retry suggestions
+- **Content size errors** - Automatic rejection of responses over 50MB
+- **Format errors** - Non-JSON content with format-specific guidance
+- **Rate limiting** - 429 responses with wait instructions
+
+### Processing Errors
 - Quicktype processing errors
 - Shape filtering errors
+- Invalid URL format errors
+
+All errors include actionable messages and debugging information to help resolve issues quickly.
+
+## Remote Data Capabilities
+
+### Supported Sources
+- **Public APIs** - REST endpoints returning JSON data
+- **Static JSON files** - JSON files hosted on web servers  
+- **Local development** - `http://localhost` endpoints during development
+
+### Content Size Management
+- **Automatic detection** - Checks Content-Length headers before download
+- **Memory protection** - Prevents downloading files larger than 50MB
+- **Progress indication** - Clear error messages showing actual vs. maximum size
+- **Streaming safety** - Validates content size after download for headers without Content-Length
+
+### Common Use Cases
+
+**For LLMs:**
+- Filter large API responses to extract only relevant data
+- Generate schemas from public API endpoints for integration
+- Process configuration files from remote sources
+- Analyze sample data from documentation URLs
+
+**For Development:**
+- Extract TypeScript types from API documentation examples
+- Filter test data from development APIs
+- Process JSON configurations from remote repositories
+- Analyze third-party API response structures
+
+**Example Workflow:**
+1. LLM calls an API and gets a large response
+2. Uses `json_filter` to extract only needed fields
+3. Processes clean, relevant data without noise
+4. Generates schemas with `json_schema` for type safety
