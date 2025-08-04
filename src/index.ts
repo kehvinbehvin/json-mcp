@@ -35,9 +35,9 @@ type JsonSchemaInput = z.infer<typeof JsonSchemaInputSchema>;
 type JsonFilterInput = z.infer<typeof JsonFilterInputSchema>;
 type Shape = { [key: string]: true | Shape };
 
-// Define error types (extended to support new ingestion strategies)
+// Define error types (extended to support new ingestion strategies and edge cases)
 interface JsonSchemaError {
-  readonly type: 'file_not_found' | 'invalid_json' | 'network_error' | 'invalid_url' | 'unsupported_content_type' | 'rate_limit_exceeded' | 'validation_error' | 'quicktype_error';
+  readonly type: 'file_not_found' | 'invalid_json' | 'network_error' | 'invalid_url' | 'unsupported_content_type' | 'rate_limit_exceeded' | 'validation_error' | 'authentication_required' | 'server_error' | 'content_too_large' | 'quicktype_error';
   readonly message: string;
   readonly details?: unknown;
 }
