@@ -2,8 +2,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { promises as fs } from 'fs';
-import { resolve } from 'path';
 
 import {
     quicktype,
@@ -13,13 +11,23 @@ import {
     SerializedRenderResult
 } from "quicktype-core";
 
-// Define input validation schemas
+// Import strategy pattern components
+import { JsonIngestionContext } from './context/JsonIngestionContext.js';
+import { JsonIngestionResult } from './types/JsonIngestion.js';
+
+// Define input validation schemas (Phase 2: Support both files and URLs)
 const JsonSchemaInputSchema = z.object({
-  filePath: z.string().min(1, "File path is required")
+  filePath: z.string().min(1, "File path or HTTPS URL is required").refine(
+    (val) => val.length > 0 && (val.startsWith('./') || val.startsWith('/') || val.startsWith('https://') || !val.includes('/')),
+    "Must be a valid file path or HTTPS URL"
+  )
 });
 
 const JsonFilterInputSchema = z.object({
-  filePath: z.string().min(1, "File path is required"),
+  filePath: z.string().min(1, "File path or HTTPS URL is required").refine(
+    (val) => val.length > 0 && (val.startsWith('./') || val.startsWith('/') || val.startsWith('https://') || !val.includes('/')),
+    "Must be a valid file path or HTTPS URL"
+  ),
   shape: z.any().describe("Shape object defining what to extract")
 });
 
@@ -27,9 +35,9 @@ type JsonSchemaInput = z.infer<typeof JsonSchemaInputSchema>;
 type JsonFilterInput = z.infer<typeof JsonFilterInputSchema>;
 type Shape = { [key: string]: true | Shape };
 
-// Define error types
+// Define error types (extended to support new ingestion strategies)
 interface JsonSchemaError {
-  readonly type: 'file_not_found' | 'invalid_json' | 'quicktype_error' | 'validation_error';
+  readonly type: 'file_not_found' | 'invalid_json' | 'network_error' | 'invalid_url' | 'unsupported_content_type' | 'rate_limit_exceeded' | 'validation_error' | 'quicktype_error';
   readonly message: string;
   readonly details?: unknown;
 }
@@ -60,6 +68,9 @@ const server = new McpServer({
     tools: {},
   },
 });
+
+// Initialize the JSON ingestion context (Phase 1: LocalFileStrategy only)
+const jsonIngestionContext = new JsonIngestionContext();
 
 async function quicktypeJSON(
   targetLanguage: LanguageName, 
@@ -110,37 +121,18 @@ function extractWithShape(data: any, shape: Shape): any {
  */
 async function processJsonSchema(input: JsonSchemaInput): Promise<JsonSchemaResult> {
   try {
-    // Resolve and validate file path
-    const resolvedPath = resolve(input.filePath);
+    // Use strategy pattern to ingest JSON content
+    const ingestionResult = await jsonIngestionContext.ingest(input.filePath);
     
-    // Check if file exists and read it
-    let jsonContent: string;
-    try {
-      jsonContent = await fs.readFile(resolvedPath, 'utf-8');
-    } catch (error) {
+    if (!ingestionResult.success) {
+      // Map strategy errors to existing error format for backward compatibility
       return {
         success: false,
-        error: {
-          type: 'file_not_found',
-          message: `File not found: ${resolvedPath}`,
-          details: error
-        }
+        error: ingestionResult.error
       };
     }
 
-    // Validate JSON format
-    try {
-      JSON.parse(jsonContent);
-    } catch (error) {
-      return {
-        success: false,
-        error: {
-          type: 'invalid_json',
-          message: 'Invalid JSON format in file',
-          details: error
-        }
-      };
-    }
+    const jsonContent = ingestionResult.content;
 
     // Generate schema using quicktype with fixed parameters
     try {
@@ -181,34 +173,27 @@ async function processJsonSchema(input: JsonSchemaInput): Promise<JsonSchemaResu
  */
 async function processJsonFilter(input: JsonFilterInput): Promise<JsonFilterResult> {
   try {
-    // Resolve and validate file path
-    const resolvedPath = resolve(input.filePath);
+    // Use strategy pattern to ingest JSON content
+    const ingestionResult = await jsonIngestionContext.ingest(input.filePath);
     
-    // Check if file exists and read it
-    let jsonContent: string;
-    try {
-      jsonContent = await fs.readFile(resolvedPath, 'utf-8');
-    } catch (error) {
+    if (!ingestionResult.success) {
+      // Map strategy errors to existing error format for backward compatibility
       return {
         success: false,
-        error: {
-          type: 'file_not_found',
-          message: `File not found: ${resolvedPath}`,
-          details: error
-        }
+        error: ingestionResult.error
       };
     }
 
     // Parse JSON
     let parsedData: any;
     try {
-      parsedData = JSON.parse(jsonContent);
+      parsedData = JSON.parse(ingestionResult.content);
     } catch (error) {
       return {
         success: false,
         error: {
           type: 'invalid_json',
-          message: 'Invalid JSON format in file',
+          message: 'Invalid JSON format in content',
           details: error
         }
       };
@@ -247,9 +232,9 @@ async function processJsonFilter(input: JsonFilterInput): Promise<JsonFilterResu
 // Register JSON schema tool
 server.tool(
     "json_schema",
-    "Generate TypeScript schema for a JSON file. Provide the file path as the only parameter.",
+    "Generate TypeScript schema for a JSON file or remote JSON URL. Provide the file path or HTTPS URL as the only parameter.",
     {
-        filePath: z.string().describe("JSON file path to generate schema")
+        filePath: z.string().describe("JSON file path (local) or HTTPS URL to generate schema from")
     },
     async ({ filePath }) => {
         try {
@@ -294,9 +279,9 @@ server.tool(
 
 server.tool(
     "json_filter",
-    "Filter JSON data using a shape object to extract only the fields you want. Provide filePath and shape parameters.",
+    "Filter JSON data using a shape object to extract only the fields you want. Provide filePath (local file or HTTPS URL) and shape parameters.",
     {
-        filePath: z.string().describe("Path to the JSON file to filter"),
+        filePath: z.string().describe("Path to the JSON file (local) or HTTPS URL to filter"),
         shape: z.unknown().describe(`Shape object (formatted as valid JSON) defining what fields to extract. Use 'true' to include a field, or nested objects for deep extraction.
 
 Examples:
