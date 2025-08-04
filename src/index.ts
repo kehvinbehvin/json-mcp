@@ -532,6 +532,7 @@ Examples:
 Note: 
 - Arrays are automatically handled - the shape is applied to each item in the array.
 - Use json_schema tool to analyse the JSON file schema before using this tool.
+- Use json_dry_run tool to get a size breakdown of your desired json shape before using this tool.
 `)
     },
     async ({ filePath, shape }) => {
