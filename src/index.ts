@@ -15,18 +15,18 @@ import {
 import { JsonIngestionContext } from './context/JsonIngestionContext.js';
 import { JsonIngestionResult } from './types/JsonIngestion.js';
 
-// Define input validation schemas (Phase 2: Support both files and URLs)
+// Define input validation schemas (Support files and HTTP/HTTPS URLs)
 const JsonSchemaInputSchema = z.object({
-  filePath: z.string().min(1, "File path or HTTPS URL is required").refine(
-    (val) => val.length > 0 && (val.startsWith('./') || val.startsWith('/') || val.startsWith('https://') || !val.includes('/')),
-    "Must be a valid file path or HTTPS URL"
+  filePath: z.string().min(1, "File path or HTTP/HTTPS URL is required").refine(
+    (val) => val.length > 0 && (val.startsWith('./') || val.startsWith('/') || val.startsWith('http://') || val.startsWith('https://') || !val.includes('/')),
+    "Must be a valid file path or HTTP/HTTPS URL"
   )
 });
 
 const JsonFilterInputSchema = z.object({
-  filePath: z.string().min(1, "File path or HTTPS URL is required").refine(
-    (val) => val.length > 0 && (val.startsWith('./') || val.startsWith('/') || val.startsWith('https://') || !val.includes('/')),
-    "Must be a valid file path or HTTPS URL"
+  filePath: z.string().min(1, "File path or HTTP/HTTPS URL is required").refine(
+    (val) => val.length > 0 && (val.startsWith('./') || val.startsWith('/') || val.startsWith('http://') || val.startsWith('https://') || !val.includes('/')),
+    "Must be a valid file path or HTTP/HTTPS URL"
   ),
   shape: z.any().describe("Shape object defining what to extract")
 });
@@ -232,9 +232,9 @@ async function processJsonFilter(input: JsonFilterInput): Promise<JsonFilterResu
 // Register JSON schema tool
 server.tool(
     "json_schema",
-    "Generate TypeScript schema for a JSON file or remote JSON URL. Provide the file path or HTTPS URL as the only parameter.",
+    "Generate TypeScript schema for a JSON file or remote JSON URL. Provide the file path or HTTP/HTTPS URL as the only parameter.",
     {
-        filePath: z.string().describe("JSON file path (local) or HTTPS URL to generate schema from")
+        filePath: z.string().describe("JSON file path (local) or HTTP/HTTPS URL to generate schema from")
     },
     async ({ filePath }) => {
         try {
@@ -279,9 +279,9 @@ server.tool(
 
 server.tool(
     "json_filter",
-    "Filter JSON data using a shape object to extract only the fields you want. Provide filePath (local file or HTTPS URL) and shape parameters.",
+    "Filter JSON data using a shape object to extract only the fields you want. Provide filePath (local file or HTTP/HTTPS URL) and shape parameters.",
     {
-        filePath: z.string().describe("Path to the JSON file (local) or HTTPS URL to filter"),
+        filePath: z.string().describe("Path to the JSON file (local) or HTTP/HTTPS URL to filter"),
         shape: z.unknown().describe(`Shape object (formatted as valid JSON) defining what fields to extract. Use 'true' to include a field, or nested objects for deep extraction.
 
 Examples:

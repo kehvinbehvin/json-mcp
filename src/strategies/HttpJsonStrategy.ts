@@ -2,23 +2,17 @@ import { JsonIngestionStrategy } from './JsonIngestionStrategy.js';
 import { JsonIngestionResult } from '../types/JsonIngestion.js';
 
 /**
- * Strategy for ingesting JSON from HTTPS URLs
+ * Strategy for ingesting JSON from HTTP/HTTPS URLs
  * Handles both static JSON files and API endpoints that return JSON
- * Unified strategy for all HTTPS JSON sources
+ * Unified strategy for all HTTP and HTTPS JSON sources
  */
-export class HttpsJsonStrategy extends JsonIngestionStrategy {
+export class HttpJsonStrategy extends JsonIngestionStrategy {
   private readonly requestTimeout: number = 10000; // 10 second timeout
   private readonly maxResponseSize: number = 50 * 1024 * 1024; // 50MB limit
 
   canHandle(source: string): boolean {
-    // Handle HTTPS URLs only (for security)
-    if (!source.startsWith('https://')) {
-      return false;
-    }
-
-    // For Phase 2, we'll handle URLs that look like JSON files
-    // or we'll try them and check the content-type
-    return true; // We'll validate the content-type after fetching
+    // Handle both HTTP and HTTPS URLs
+    return source.startsWith('http://') || source.startsWith('https://');
   }
 
   async ingest(source: string): Promise<JsonIngestionResult> {
@@ -38,13 +32,13 @@ export class HttpsJsonStrategy extends JsonIngestionStrategy {
         };
       }
 
-      // Only allow HTTPS for security
-      if (url.protocol !== 'https:') {
+      // Accept both HTTP and HTTPS protocols
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') {
         return {
           success: false,
           error: {
             type: 'invalid_url',
-            message: 'Only HTTPS URLs are supported for security reasons',
+            message: 'Only HTTP and HTTPS URLs are supported',
             details: { protocol: url.protocol }
           }
         };
@@ -277,9 +271,9 @@ export class HttpsJsonStrategy extends JsonIngestionStrategy {
 
   getMetadata() {
     return {
-      name: 'HttpsJsonStrategy',
-      description: 'Fetches JSON data from HTTPS URLs (static files and API endpoints)',
-      supportedSources: ['HTTPS URLs serving JSON content', 'JSON API endpoints', 'Static .json files', 'Any HTTPS URL returning valid JSON']
+      name: 'HttpJsonStrategy',
+      description: 'Fetches JSON data from HTTP/HTTPS URLs (static files and API endpoints)',
+      supportedSources: ['HTTP/HTTPS URLs serving JSON content', 'JSON API endpoints', 'Static .json files', 'Any HTTP/HTTPS URL returning valid JSON']
     };
   }
 }

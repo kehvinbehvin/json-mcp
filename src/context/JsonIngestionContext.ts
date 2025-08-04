@@ -1,6 +1,6 @@
 import { JsonIngestionStrategy } from '../strategies/JsonIngestionStrategy.js';
 import { LocalFileStrategy } from '../strategies/LocalFileStrategy.js';
-import { HttpsJsonStrategy } from '../strategies/HttpsJsonStrategy.js';
+import { HttpJsonStrategy } from '../strategies/HttpJsonStrategy.js';
 import { JsonIngestionResult } from '../types/JsonIngestion.js';
 
 /**
@@ -13,8 +13,8 @@ export class JsonIngestionContext {
     // Phase 1: LocalFileStrategy
     this.registerStrategy(new LocalFileStrategy());
     
-    // Phase 2: HttpsJsonStrategy 
-    this.registerStrategy(new HttpsJsonStrategy());
+    // Phase 2: HttpJsonStrategy (supports both HTTP and HTTPS)
+    this.registerStrategy(new HttpJsonStrategy());
   }
 
   /**
