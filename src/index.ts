@@ -46,6 +46,7 @@ interface JsonSchemaError {
 type JsonSchemaResult = {
   readonly success: true;
   readonly schema: string;
+  readonly fileSizeBytes: number;
 } | {
   readonly success: false;
   readonly error: JsonSchemaError;
@@ -134,6 +135,9 @@ async function processJsonSchema(input: JsonSchemaInput): Promise<JsonSchemaResu
 
     const jsonContent = ingestionResult.content;
 
+    // Calculate file size in bytes
+    const fileSizeBytes = new TextEncoder().encode(jsonContent).length;
+
     // Generate schema using quicktype with fixed parameters
     try {
       const result = await quicktypeJSON(
@@ -144,7 +148,8 @@ async function processJsonSchema(input: JsonSchemaInput): Promise<JsonSchemaResu
       
       return {
         success: true,
-        schema: result.lines.join('\n')
+        schema: result.lines.join('\n'),
+        fileSizeBytes
       };
     } catch (error) {
       return {
@@ -244,11 +249,20 @@ server.tool(
             const result = await processJsonSchema(validatedInput);
             
             if (result.success) {
+                // Format file size for display
+                const formatFileSize = (bytes: number): string => {
+                    if (bytes < 1024) return `${bytes} bytes`;
+                    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+                    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+                };
+
+                const fileSizeInfo = `// File size: ${formatFileSize(result.fileSizeBytes)} (${result.fileSizeBytes} bytes)\n\n`;
+                
                 return {
                     content: [
                         {
                             type: "text",
-                            text: result.schema
+                            text: fileSizeInfo + result.schema
                         }
                     ]
                 };
