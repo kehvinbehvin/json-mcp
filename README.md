@@ -56,21 +56,34 @@ export interface GeneratedType {
 ### `json_filter`
 Extracts specific fields from JSON data using a shape definition. Perfect for filtering large API responses to include only relevant data.
 
+**Features:**
+- **Automatic Chunking**: When filtered data exceeds 400KB, the tool automatically splits results into manageable chunks
+- **Line-Based Pagination**: Uses simple line-based splitting
+- **Default**: Defaults to chunk 0 when no chunk index is specified
+
 **Parameters:**
 - `filePath`: Local file path or HTTP/HTTPS URL to the JSON data
 - `shape`: Shape object defining which fields to extract
+- `chunkIndex` (optional): Index of chunk to retrieve (0-based). Only needed for large datasets that exceed 400KB after filtering
+
+**Chunking Behavior:**
+- **Small data (≤400KB)**: Returns all filtered data in one response
+- **Large data (>400KB)**: Automatically chunks data and returns the requested chunk with metadata
+- **No configuration options (for now)**: 400KB threshold is fixed
 
 ### `json_dry_run`
-Naive size breakdown of JSON data using a shape object to determine granularity. Returns size information in bytes for each specified field, mirroring the shape structure but with size values instead of data.
+Analyzes JSON data size and provides chunking recommendations. Returns size information in bytes for each specified field and calculates how many chunks would be needed for `json_filter`.
 
 **Parameters:**
 - `filePath`: Local file path or HTTP/HTTPS URL to the JSON data
 - `shape`: Shape object defining what to analyze for size
 
+**Features:**
+- **Filtered Size Calculation**: Shows exact size after applying the shape filter
+- **Chunking Recommendations**: Indicates how many 400KB chunks would be needed
+
 **Use Cases:**
-- Determine data size before filtering large JSON files
-- Optimize API response filtering by understanding field sizes
-- Analyze storage requirements for specific data structures
+- Determine if chunking will be needed for a specific shape
 - Compare relative sizes of different JSON sections
 
 **Examples:**
@@ -85,7 +98,9 @@ json_dry_run({
 
 **Sample Output:**
 ```
-Total file size: 245.8 KB (251,847 bytes)
+Total file size: 2.4 MB (2,517,847 bytes)
+Filtered size: 245.8 KB (251,847 bytes)
+Recommended chunks: 1
 
 Size breakdown:
 {
@@ -99,20 +114,38 @@ Size breakdown:
 
 ## `json_filter` Examples
 
-*Filter API response:*
+*Filter API response (small data):*
 ```bash
 json_filter({ 
   filePath: "https://jsonplaceholder.typicode.com/users",
   shape: {"name": true, "email": true, "address": {"city": true}}
 })
+# Returns: All filtered data in one response (no chunking needed)
 ```
 
-*Filter local file:*
+*Filter large dataset (automatic chunking):*
 ```bash
+# Step 1: Check size first
+json_dry_run({
+  filePath: "./large-dataset.json", 
+  shape: {"users": {"id": true, "name": true}}
+})
+# Returns: "Filtered size: 2.1 MB, Recommended chunks: 6"
+
+# Step 2: Get first chunk (default)
 json_filter({
   filePath: "./large-dataset.json", 
   shape: {"users": {"id": true, "name": true}}
 })
+# Returns: Chunk 0 data + metadata {"chunkIndex": 0, "totalChunks": 6}
+
+# Step 3: Get subsequent chunks
+json_filter({
+  filePath: "./large-dataset.json", 
+  shape: {"users": {"id": true, "name": true}},
+  chunkIndex: 1
+})
+# Returns: Chunk 1 data + metadata {"chunkIndex": 1, "totalChunks": 6}
 ```
 
 **Shape Examples:**
