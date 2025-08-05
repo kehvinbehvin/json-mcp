@@ -28,7 +28,8 @@ const JsonFilterInputSchema = z.object({
     (val) => val.length > 0 && (val.startsWith('./') || val.startsWith('/') || val.startsWith('http://') || val.startsWith('https://') || !val.includes('/')),
     "Must be a valid file path or HTTP/HTTPS URL"
   ),
-  shape: z.any().describe("Shape object defining what to extract")
+  shape: z.any().describe("Shape object defining what to extract"),
+  chunkIndex: z.number().int().min(0).optional().describe("Index of chunk to retrieve (0-based)")
 });
 
 const JsonDryRunInputSchema = z.object({
@@ -64,6 +65,10 @@ type JsonSchemaResult = {
 type JsonFilterResult = {
   readonly success: true;
   readonly filteredData: any;
+  readonly chunkInfo?: {
+    readonly chunkIndex: number;
+    readonly totalChunks: number;
+  };
 } | {
   readonly success: false;
   readonly error: JsonSchemaError;
@@ -73,6 +78,8 @@ type JsonDryRunResult = {
   readonly success: true;
   readonly sizeBreakdown: any;
   readonly totalSize: number;
+  readonly filteredSize: number;
+  readonly recommendedChunks: number;
 } | {
   readonly success: false;
   readonly error: JsonSchemaError;
@@ -350,9 +357,53 @@ async function processJsonFilter(input: JsonFilterInput): Promise<JsonFilterResu
     try {
       const filteredData = extractWithShape(parsedData, input.shape);
       
+      // Convert filtered data to JSON string to check size
+      const filteredJson = JSON.stringify(filteredData, null, 2);
+      const filteredSize = new TextEncoder().encode(filteredJson).length;
+      
+      // Define chunking threshold (400KB)
+      const CHUNK_THRESHOLD = 400 * 1024;
+      
+      // If under threshold, return all data
+      if (filteredSize <= CHUNK_THRESHOLD) {
+        return {
+          success: true,
+          filteredData
+        };
+      }
+      
+      // Calculate total chunks needed
+      const totalChunks = Math.ceil(filteredSize / CHUNK_THRESHOLD);
+      const chunkIndex = input.chunkIndex ?? 0; // Default to 0
+      
+      // Validate chunk index
+      if (chunkIndex >= totalChunks || chunkIndex < 0) {
+        return {
+          success: false,
+          error: {
+            type: 'validation_error',
+            message: `Invalid chunkIndex ${chunkIndex}. Must be between 0 and ${totalChunks - 1}`,
+            details: { chunkIndex, totalChunks }
+          }
+        };
+      }
+      
+      // Line-based chunking
+      const lines = filteredJson.split('\n');
+      const linesPerChunk = Math.ceil(lines.length / totalChunks);
+      const startLine = chunkIndex * linesPerChunk;
+      const endLine = Math.min(startLine + linesPerChunk, lines.length);
+      
+      // Extract chunk as text
+      const chunkText = lines.slice(startLine, endLine).join('\n');
+      
       return {
         success: true,
-        filteredData
+        filteredData: chunkText, // Return as string when chunking
+        chunkInfo: {
+          chunkIndex,
+          totalChunks
+        }
       };
     } catch (error) {
       return {
@@ -414,10 +465,21 @@ async function processJsonDryRun(input: JsonDryRunInput): Promise<JsonDryRunResu
       // Calculate total size of the entire parsed data
       const totalSize = calculateValueSize(parsedData);
       
+      // Calculate filtered data size
+      const filteredData = extractWithShape(parsedData, input.shape);
+      const filteredJson = JSON.stringify(filteredData, null, 2);
+      const filteredSize = new TextEncoder().encode(filteredJson).length;
+      
+      // Calculate recommended chunks (400KB threshold)
+      const CHUNK_THRESHOLD = 400 * 1024;
+      const recommendedChunks = Math.ceil(filteredSize / CHUNK_THRESHOLD);
+      
       return {
         success: true,
         sizeBreakdown,
-        totalSize
+        totalSize,
+        filteredSize,
+        recommendedChunks
       };
     } catch (error) {
       return {
@@ -533,9 +595,10 @@ Note:
 - Arrays are automatically handled - the shape is applied to each item in the array.
 - Use json_schema tool to analyse the JSON file schema before using this tool.
 - Use json_dry_run tool to get a size breakdown of your desired json shape before using this tool.
-`)
+`),
+        chunkIndex: z.number().optional().describe("Index of chunk to retrieve (0-based). If filtered data exceeds 400KB, it will be automatically chunked. Defaults to 0 if not specified.")
     },
-    async ({ filePath, shape }) => {
+    async ({ filePath, shape, chunkIndex }) => {
         try {
             // If shape is a string, parse it as JSON
             let parsedShape = shape;
@@ -559,20 +622,39 @@ Note:
 
             const validatedInput = JsonFilterInputSchema.parse({
                 filePath,
-                shape: parsedShape
+                shape: parsedShape,
+                chunkIndex
             });
             
             const result = await processJsonFilter(validatedInput);
             
             if (result.success) {
-                return {
-                    content: [
-                        {
-                            type: "text",
-                            text: JSON.stringify(result.filteredData, null, 2)
-                        }
-                    ]
-                };
+                // Check if chunking is active
+                if (result.chunkInfo) {
+                    // Return chunk data + metadata as separate content items
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: result.filteredData // This is already a string when chunking
+                            },
+                            {
+                                type: "text",
+                                text: JSON.stringify(result.chunkInfo)
+                            }
+                        ]
+                    };
+                } else {
+                    // No chunking - return as normal JSON
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: JSON.stringify(result.filteredData, null, 2)
+                            }
+                        ]
+                    };
+                }
             } else {
                 return {
                     content: [
@@ -665,7 +747,7 @@ Note:
                     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
                 };
 
-                const header = `Total file size: ${formatSize(result.totalSize)} (${result.totalSize} bytes)\n\nSize breakdown:\n`;
+                const header = `Total file size: ${formatSize(result.totalSize)} (${result.totalSize} bytes)\nFiltered size: ${formatSize(result.filteredSize)} (${result.filteredSize} bytes)\nRecommended chunks: ${result.recommendedChunks}\n\nSize breakdown:\n`;
                 const breakdown = JSON.stringify(result.sizeBreakdown, null, 2);
                 
                 return {
