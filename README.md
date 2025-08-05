@@ -1,51 +1,34 @@
 # JSON MCP Filter
 
-A Model Context Protocol (MCP) server that provides JSON schema generation and filtering tools for both local files and remote HTTP/HTTPS endpoints. This server uses [quicktype](https://github.com/quicktype/quicktype) to convert JSON samples into TypeScript type definitions and offers JSON data filtering capabilities.
+A powerful Model Context Protocol (MCP) server that provides JSON schema generation and filtering tools for local files and remote HTTP/HTTPS endpoints. Built with [quicktype](https://github.com/quicktype/quicktype) for robust TypeScript type generation.
 
-Particularly helpful for JSON files that are on the larger side which contains data you don't want included in your LLM context. Perfect for filtering API responses and extracting only relevant data.
+**Perfect for**: Filtering large JSON files and API responses to extract only relevant data for LLM context, while maintaining type safety.
 
-## Features
+## ✨ Key Features
 
-- **JSON Schema Generation**: Convert JSON files into TypeScript type definitions using quicktype-core
-- **JSON Filtering**: Extract specific fields from JSON data using shape-based filtering
-- **Remote File Support**: Fetch and process JSON from HTTP/HTTPS URLs and APIs
-- **Content Size Protection**: Automatic handling of large responses (up to 50MB)
-- **MCP Integration**: Seamlessly integrates with Claude Desktop and Claude Code
-- **Type Safety**: Built with TypeScript and includes comprehensive error handling
-- **Enhanced Error Messages**: Clear, actionable error messages for common issues
+- 🔄 **Schema Generation** - Convert JSON to TypeScript interfaces using quicktype
+- 🎯 **Smart Filtering** - Extract specific fields with shape-based filtering  
+- 🌐 **Remote Support** - Works with HTTP/HTTPS URLs and API endpoints
+- 📦 **Auto Chunking** - Handles large datasets with automatic 400KB chunking
+- 🛡️ **Size Protection** - Built-in 50MB limit with memory safety
+- ⚡ **MCP Ready** - Seamless integration with Claude Desktop and Claude Code
+- 🚨 **Smart Errors** - Clear, actionable error messages with debugging info
 
-## Tools Provided
+## 🛠️ Available Tools
 
 ### `json_schema`
-Generates TypeScript type definitions from JSON files or remote URLs.
+
+Generates TypeScript interfaces from JSON data.
 
 **Parameters:**
-- `filePath`: Local file path or HTTP/HTTPS URL to the JSON data
+- `filePath`: Local file path or HTTP/HTTPS URL
 
-**Examples:**
-
-*Local file:*
-```bash
-json_schema({ filePath: "./data.json" })
-```
-
-*Remote JSON file:*
-```bash
-json_schema({ filePath: "https://api.example.com/config.json" })
-```
-
-*API endpoint:*
-```bash
-json_schema({ filePath: "https://jsonplaceholder.typicode.com/users" })
-```
-
-**Sample Input:**
-```json
+**Example:**
+```javascript
+// Input JSON
 {"name": "John", "age": 30, "city": "New York"}
-```
 
-**Sample Output:**
-```typescript
+// Generated TypeScript
 export interface GeneratedType {
     name: string;
     age:  number;
@@ -54,205 +37,117 @@ export interface GeneratedType {
 ```
 
 ### `json_filter`
-Extracts specific fields from JSON data using a shape definition. Perfect for filtering large API responses to include only relevant data.
 
-**Features:**
-- **Automatic Chunking**: When filtered data exceeds 400KB, the tool automatically splits results into manageable chunks
-- **Line-Based Pagination**: Uses simple line-based splitting
-- **Default**: Defaults to chunk 0 when no chunk index is specified
+Extracts specific fields using shape-based filtering with automatic chunking for large datasets.
 
 **Parameters:**
-- `filePath`: Local file path or HTTP/HTTPS URL to the JSON data
-- `shape`: Shape object defining which fields to extract
-- `chunkIndex` (optional): Index of chunk to retrieve (0-based). Only needed for large datasets that exceed 400KB after filtering
+- `filePath`: Local file path or HTTP/HTTPS URL
+- `shape`: Object defining which fields to extract
+- `chunkIndex` (optional): Chunk index for large datasets (0-based)
 
-**Chunking Behavior:**
-- **Small data (≤400KB)**: Returns all filtered data in one response
-- **Large data (>400KB)**: Automatically chunks data and returns the requested chunk with metadata
-- **No configuration options (for now)**: 400KB threshold is fixed
+**Auto-Chunking:**
+- ≤400KB: Returns all data
+- >400KB: Auto-chunks with metadata
 
 ### `json_dry_run`
-Analyzes JSON data size and provides chunking recommendations. Returns size information in bytes for each specified field and calculates how many chunks would be needed for `json_filter`.
+
+Analyzes data size and provides chunking recommendations before filtering.
 
 **Parameters:**
-- `filePath`: Local file path or HTTP/HTTPS URL to the JSON data
-- `shape`: Shape object defining what to analyze for size
+- `filePath`: Local file path or HTTP/HTTPS URL  
+- `shape`: Object defining what to analyze
 
-**Features:**
-- **Filtered Size Calculation**: Shows exact size after applying the shape filter
-- **Chunking Recommendations**: Indicates how many 400KB chunks would be needed
+**Returns:** Size breakdown and chunk recommendations
 
-**Use Cases:**
-- Determine if chunking will be needed for a specific shape
-- Compare relative sizes of different JSON sections
+## 📋 Usage Examples
 
-**Examples:**
-
-*Analyze data size:*
-```bash
-json_dry_run({
-  filePath: "https://api.example.com/users",
-  shape: {"name": true, "email": true, "posts": {"title": true}}
-})
-```
-
-**Sample Output:**
-```
-Total file size: 2.4 MB (2,517,847 bytes)
-Filtered size: 245.8 KB (251,847 bytes)
-Recommended chunks: 1
-
-Size breakdown:
-{
-  "name": 1205,
-  "email": 1834, 
-  "posts": {
-    "title": 5692
-  }
-}
-```
-
-## `json_filter` Examples
-
-*Filter API response (small data):*
-```bash
-json_filter({ 
-  filePath: "https://jsonplaceholder.typicode.com/users",
-  shape: {"name": true, "email": true, "address": {"city": true}}
-})
-# Returns: All filtered data in one response (no chunking needed)
-```
-
-*Filter large dataset (automatic chunking):*
-```bash
-# Step 1: Check size first
-json_dry_run({
-  filePath: "./large-dataset.json", 
-  shape: {"users": {"id": true, "name": true}}
-})
-# Returns: "Filtered size: 2.1 MB, Recommended chunks: 6"
-
-# Step 2: Get first chunk (default)
-json_filter({
-  filePath: "./large-dataset.json", 
-  shape: {"users": {"id": true, "name": true}}
-})
-# Returns: Chunk 0 data + metadata {"chunkIndex": 0, "totalChunks": 6}
-
-# Step 3: Get subsequent chunks
-json_filter({
-  filePath: "./large-dataset.json", 
-  shape: {"users": {"id": true, "name": true}},
-  chunkIndex: 1
-})
-# Returns: Chunk 1 data + metadata {"chunkIndex": 1, "totalChunks": 6}
-```
-
-**Shape Examples:**
+### Basic Filtering
 ```javascript
-// Extract single field
+// Simple field extraction
+json_filter({
+  filePath: "https://api.example.com/users",
+  shape: {"name": true, "email": true}
+})
+```
+
+### Shape Patterns
+```javascript
+// Single field
 {"name": true}
 
-// Extract multiple fields  
-{"name": true, "age": true}
-
-// Extract nested fields
+// Nested objects
 {"user": {"name": true, "email": true}}
 
-// Extract from arrays (applies to each item)
+// Arrays (applies to each item)
 {"users": {"name": true, "age": true}}
 
-// Complex nested extraction
+// Complex nested
 {
   "results": {
-    "name": {"first": true, "last": true},
-    "email": true,
-    "location": {"city": true, "country": true}
+    "profile": {"name": true, "location": {"city": true}}
   }
 }
 ```
 
-## ⚠️ Security Disclaimer
+### Large Dataset Workflow
+```javascript
+// 1. Check size first
+json_dry_run({filePath: "./large.json", shape: {"users": {"id": true}}})
+// → "Recommended chunks: 6"
 
-**IMPORTANT: Remote Data Fetching**
+// 2. Get chunks
+json_filter({filePath: "./large.json", shape: {"users": {"id": true}}})
+// → Chunk 0 + metadata
 
-This tool can fetch data from remote HTTP/HTTPS URLs. Users are responsible for:
+json_filter({filePath: "./large.json", shape: {"users": {"id": true}}, chunkIndex: 1})
+// → Chunk 1 + metadata
+```
 
-- **Verifying URLs before submission** - Ensure URLs point to legitimate, safe endpoints
-- **Data validation** - Review data sources and content before processing  
-- **Rate limiting** - Respect API rate limits and terms of service of external services
-- **Content safety** - This tool does not validate the safety or appropriateness of remote content
+## 🔒 Security Notice
 
-**The repository maintainers are not responsible for:**
-- Data fetched from external URLs
-- Privacy implications of remote requests  
-- Malicious or inappropriate content from third-party sources
-- API abuse or violations of third-party terms of service
+**Remote Data Fetching**: This tool fetches data from HTTP/HTTPS URLs. Users are responsible for:
 
-**Recommendations:**
-- Only use trusted, public APIs and data sources
-- Verify URLs are legitimate before processing
-- Be cautious with internal/localhost URLs in shared environments
-- Review API documentation and terms of service before use
+✅ **Safe Practices:**
+- Verify URLs point to legitimate endpoints
+- Use trusted, public APIs only
+- Respect API rate limits and terms of service
+- Review data sources before processing
 
-## Installation
+❌ **Maintainers Not Responsible For:**
+- External URL content
+- Privacy implications of remote requests
+- Third-party API abuse or violations
 
-### Quick Start (Recommended)
+💡 **Recommendation**: Only use trusted, public data sources.
 
+## 🚀 Quick Start
+
+### Option 1: NPX (Recommended)
 ```bash
-# Using npx (no installation required)
+# No installation required
 npx json-mcp-filter@latest
+```
 
-# Or install globally
+### Option 2: Global Install
+```bash
 npm install -g json-mcp-filter@latest
 json-mcp-server
 ```
 
-### From Source
-
-1. Clone this repository:
+### Option 3: From Source
 ```bash
 git clone <repository-url>
 cd json-mcp-filter
-```
-
-2. Install dependencies:
-```bash
 npm install
-```
-
-3. Build the server:
-```bash
 npm run build
 ```
 
-## Setup for Claude Desktop
+## ⚙️ MCP Integration
 
-Add this server to your Claude Desktop configuration file:
+### Claude Desktop
 
-### macOS
-```json
-{
-  "mcpServers": {
-    "json-mcp-filter": {
-      "command": "node",
-      "args": ["/path/to/json-mcp-filter/build/index.js"]
-    }
-  }
-}
-```
+Add to your configuration file:
 
-## Setup for Claude Code
-
-Add this server to your Claude Code MCP settings:
-
-Add a new server with:
-   - **Name**: `json-mcp-filter`
-   - **Command**: `node`
-   - **Args**: `["/path/to/json-mcp-filter/build/index.js"]`
-
-
-Or, use the `npx` method for easier setup:
 ```json
 {
   "mcpServers": {
@@ -263,147 +158,93 @@ Or, use the `npx` method for easier setup:
   }
 }
 ```
-Or
-claude mcp add json-mcp-filter node /path/to/json-mcp-filter/build/index.js
 
-## Development
+### Claude Code
 
-### Scripts
-- `npm run build` - Compile TypeScript and make executable
-- `npm run start` - Run the compiled server
-- `npm run inspect` - Run with MCP inspector for debugging
-- `npx tsc --noEmit` - Type check without emitting files
-
-### Testing
-Test the server using the MCP inspector:
 ```bash
-npm run inspect
+# Add via CLI
+claude mcp add json-mcp-filter npx -y json-mcp-filter@latest
 ```
 
-This will start the server with the MCP inspector interface for interactive testing.
+Or add manually:
+- **Name**: `json-mcp-filter`
+- **Command**: `npx`
+- **Args**: `["-y", "json-mcp-filter@latest"]`
 
-## Project Structure
+## 🔧 Development
+
+### Commands
+```bash
+npm run build      # Compile TypeScript
+npm run start      # Run compiled server  
+npm run inspect    # Debug with MCP inspector
+npx tsc --noEmit   # Type check only
+```
+
+### Testing
+```bash
+npm run inspect    # Interactive testing interface
+```
+
+## 📁 Project Structure
 
 ```
 src/
-  index.ts                    # Main server implementation with tools
-  strategies/                 # Strategy pattern for data ingestion
-    JsonIngestionStrategy.ts  # Abstract strategy interface
-    LocalFileStrategy.ts      # Local file system access
-    HttpJsonStrategy.ts       # HTTP/HTTPS URL fetching
-  context/
-    JsonIngestionContext.ts   # Strategy management and selection
-  types/
-    JsonIngestion.ts          # Shared type definitions
-test/
-  test.json                   # Sample JSON files for testing
-build/                        # Compiled TypeScript output
+├── index.ts                    # Main server + tools
+├── strategies/                 # Data ingestion strategies
+│   ├── JsonIngestionStrategy.ts  # Abstract interface
+│   ├── LocalFileStrategy.ts      # Local file access
+│   └── HttpJsonStrategy.ts       # HTTP/HTTPS fetching
+├── context/
+│   └── JsonIngestionContext.ts   # Strategy management
+└── types/
+    └── JsonIngestion.ts          # Type definitions
 ```
 
-## Error Handling
+## 🚨 Error Handling
 
-The server includes comprehensive error handling for:
+### Comprehensive Coverage
+- **Local Files**: Not found, permissions, invalid JSON
+- **Remote URLs**: Network failures, auth errors (401/403), server errors (500+)
+- **Content Size**: Auto-reject >50MB with clear messages
+- **Format Detection**: Smart detection of HTML/XML with guidance
+- **Rate Limiting**: 429 responses with retry instructions
+- **Processing**: Quicktype errors, shape filtering issues
 
-### Local File Errors
-- File not found errors
-- Invalid JSON format
-- File permission issues
+**All errors include actionable debugging information.**
 
-### Remote URL Errors  
-- **Network errors** - Connection failures, timeouts
-- **Authentication errors** - 401/403 responses with guidance
-- **Server errors** - 500-series responses with retry suggestions
-- **Content size errors** - Automatic rejection of responses over 50MB
-- **Format errors** - Non-JSON content with format-specific guidance
-- **Rate limiting** - 429 responses with wait instructions
+## ⚡ Performance
 
-### Processing Errors
-- Quicktype processing errors
-- Shape filtering errors
-- Invalid URL format errors
-
-All errors include actionable messages and debugging information to help resolve issues quickly.
-
-## Performance & File Size Handling
-
-### Expected Performance
-
-The JSON MCP tools are optimized for real-world JSON processing with the following performance characteristics:
-
+### Processing Times
 | File Size | Processing Time |
 |-----------|-----------------|
-| < 100 KB | < 10ms |
-| 100 KB - 1 MB | 10ms - 100ms |
-| 1 MB - 10 MB | 100ms - 1s |
-| 10 MB - 50 MB | 1s - 5s |
-| > 50 MB | Blocked |
+| < 100 KB  | < 10ms         |
+| 1-10 MB   | 100ms - 1s     |
+| 10-50 MB  | 1s - 5s        |
+| > 50 MB   | **Blocked**    |
 
-### Built-in File Size Protection
+### Size Protection
+- **50MB maximum** for all sources
+- **Pre-download checking** via Content-Length
+- **Memory safety** prevents OOM errors
+- **Clear error messages** with actual vs. limit sizes
 
-**Automatic Size Limits:**
-- **50 MB maximum** for both local files and remote URLs
-- **Pre-download checking** via HTTP Content-Length headers
-- **Post-download validation** for responses without size headers
+### Best Practices
+- Use `json_dry_run` first for large files
+- Filter with `json_filter` before schema generation
+- Focus shapes on essential fields only
 
-**Size Limit Enforcement:**
+## 🌐 Supported Sources
 
-*Local Files:*
-```bash
-# File size checked before reading
-json_schema({ filePath: "./huge-file.json" })
-# → Error: File too large (75MB). This tool is optimized for JSON files under 50MB.
-```
+- **Public APIs** - REST endpoints with JSON responses
+- **Static Files** - JSON files on web servers
+- **Local Dev** - `http://localhost` during development
+- **Local Files** - File system access
 
-*Remote URLs:*
-```bash  
-# Content-Length header checked before download
-json_filter({ filePath: "https://api.example.com/massive-dataset" })
-# → Error: Response too large (120MB). This tool is optimized for JSON files under 50MB.
-```
+## 💡 Common Workflows
 
-**Size Information:**
-- All tools display actual file sizes in responses
-- `json_schema` shows file size at the top of generated schemas
-- `json_dry_run` provides detailed size breakdowns for optimization
-- Clear error messages show actual vs. maximum allowed sizes
-
-### Performance Recommendations
-
-**For Best Performance:**
-- Use `json_dry_run` first to analyze large files
-- Filter data with `json_filter` before generating schemas
-- Limit shape specifications to essential fields only
-- Process large datasets in smaller chunks when possible
-
-## Remote Data Capabilities
-
-### Supported Sources
-- **Public APIs** - REST endpoints returning JSON data
-- **Static JSON files** - JSON files hosted on web servers  
-- **Local development** - `http://localhost` endpoints during development
-
-### Content Size Management
-- **Automatic detection** - Checks Content-Length headers before download
-- **Memory protection** - Prevents downloading files larger than 50MB
-- **Progress indication** - Clear error messages showing actual vs. maximum size
-- **Streaming safety** - Validates content size after download for headers without Content-Length
-
-### Common Use Cases
-
-**For LLMs:**
-- Filter large API responses to extract only relevant data
-- Generate schemas from public API endpoints for integration
-- Process configuration files from remote sources
-- Analyze sample data from documentation URLs
-
-**For Development:**
-- Extract TypeScript types from API documentation examples
-- Filter test data from development APIs
-- Process JSON configurations from remote repositories
-- Analyze third-party API response structures
-
-**Example Workflow:**
-1. LLM calls an API and gets a large response
-2. Uses `json_filter` to extract only needed fields
-3. Processes clean, relevant data without noise
-4. Generates schemas with `json_schema` for type safety
+**LLM Integration:**
+1. API returns large response
+2. `json_filter` extracts relevant fields
+3. Process clean data without noise
+4. `json_schema` generates types for safety
