@@ -2,8 +2,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { promises as fs } from 'fs';
-import { resolve } from 'path';
 
 import {
     quicktype,
@@ -13,23 +11,43 @@ import {
     SerializedRenderResult
 } from "quicktype-core";
 
-// Define input validation schemas
+// Import strategy pattern components
+import { JsonIngestionContext } from './context/JsonIngestionContext.js';
+import { JsonIngestionResult } from './types/JsonIngestion.js';
+
+// Define input validation schemas (Support files and HTTP/HTTPS URLs)
 const JsonSchemaInputSchema = z.object({
-  filePath: z.string().min(1, "File path is required")
+  filePath: z.string().min(1, "File path or HTTP/HTTPS URL is required").refine(
+    (val) => val.length > 0 && (val.startsWith('./') || val.startsWith('/') || val.startsWith('http://') || val.startsWith('https://') || !val.includes('/')),
+    "Must be a valid file path or HTTP/HTTPS URL"
+  )
 });
 
 const JsonFilterInputSchema = z.object({
-  filePath: z.string().min(1, "File path is required"),
-  shape: z.any().describe("Shape object defining what to extract")
+  filePath: z.string().min(1, "File path or HTTP/HTTPS URL is required").refine(
+    (val) => val.length > 0 && (val.startsWith('./') || val.startsWith('/') || val.startsWith('http://') || val.startsWith('https://') || !val.includes('/')),
+    "Must be a valid file path or HTTP/HTTPS URL"
+  ),
+  shape: z.any().describe("Shape object defining what to extract"),
+  chunkIndex: z.number().int().min(0).optional().describe("Index of chunk to retrieve (0-based)")
+});
+
+const JsonDryRunInputSchema = z.object({
+  filePath: z.string().min(1, "File path or HTTP/HTTPS URL is required").refine(
+    (val) => val.length > 0 && (val.startsWith('./') || val.startsWith('/') || val.startsWith('http://') || val.startsWith('https://') || !val.includes('/')),
+    "Must be a valid file path or HTTP/HTTPS URL"
+  ),
+  shape: z.any().describe("Shape object defining what to analyze")
 });
 
 type JsonSchemaInput = z.infer<typeof JsonSchemaInputSchema>;
 type JsonFilterInput = z.infer<typeof JsonFilterInputSchema>;
+type JsonDryRunInput = z.infer<typeof JsonDryRunInputSchema>;
 type Shape = { [key: string]: true | Shape };
 
-// Define error types
+// Define error types (extended to support new ingestion strategies and edge cases)
 interface JsonSchemaError {
-  readonly type: 'file_not_found' | 'invalid_json' | 'quicktype_error' | 'validation_error';
+  readonly type: 'file_not_found' | 'invalid_json' | 'network_error' | 'invalid_url' | 'unsupported_content_type' | 'rate_limit_exceeded' | 'validation_error' | 'authentication_required' | 'server_error' | 'content_too_large' | 'quicktype_error';
   readonly message: string;
   readonly details?: unknown;
 }
@@ -38,6 +56,7 @@ interface JsonSchemaError {
 type JsonSchemaResult = {
   readonly success: true;
   readonly schema: string;
+  readonly fileSizeBytes: number;
 } | {
   readonly success: false;
   readonly error: JsonSchemaError;
@@ -46,6 +65,21 @@ type JsonSchemaResult = {
 type JsonFilterResult = {
   readonly success: true;
   readonly filteredData: any;
+  readonly chunkInfo?: {
+    readonly chunkIndex: number;
+    readonly totalChunks: number;
+  };
+} | {
+  readonly success: false;
+  readonly error: JsonSchemaError;
+};
+
+type JsonDryRunResult = {
+  readonly success: true;
+  readonly sizeBreakdown: any;
+  readonly totalSize: number;
+  readonly filteredSize: number;
+  readonly recommendedChunks: number;
 } | {
   readonly success: false;
   readonly error: JsonSchemaError;
@@ -60,6 +94,9 @@ const server = new McpServer({
     tools: {},
   },
 });
+
+// Initialize the JSON ingestion context (Phase 1: LocalFileStrategy only)
+const jsonIngestionContext = new JsonIngestionContext();
 
 async function quicktypeJSON(
   targetLanguage: LanguageName, 
@@ -106,41 +143,149 @@ function extractWithShape(data: any, shape: Shape): any {
 }
 
 /**
+ * Calculate the size in bytes of any JSON value
+ */
+function calculateValueSize(value: any): number {
+  if (value === null) {
+    return new TextEncoder().encode('null').length; // 4 bytes for "null"
+  }
+  
+  if (value === undefined) {
+    // undefined values are omitted in JSON.stringify, so they have 0 size
+    return 0;
+  }
+  
+  if (typeof value === 'string') {
+    // Use JSON.stringify to handle escape characters properly
+    return new TextEncoder().encode(JSON.stringify(value)).length;
+  }
+  
+  if (typeof value === 'number') {
+    return new TextEncoder().encode(value.toString()).length;
+  }
+  
+  if (typeof value === 'boolean') {
+    return new TextEncoder().encode(value.toString()).length; // "true" = 4, "false" = 5
+  }
+  
+  if (Array.isArray(value)) {
+    // Calculate size of array including JSON formatting (brackets, commas)
+    let totalSize = 2; // Opening and closing brackets []
+    for (let i = 0; i < value.length; i++) {
+      totalSize += calculateValueSize(value[i]);
+      if (i < value.length - 1) {
+        totalSize += 1; // Comma separator
+      }
+    }
+    return totalSize;
+  }
+  
+  if (typeof value === 'object') {
+    // Calculate size of object including JSON formatting (braces, colons, commas, quotes)
+    let totalSize = 2; // Opening and closing braces {}
+    const entries = Object.entries(value).filter(([, val]) => val !== undefined);
+    for (let i = 0; i < entries.length; i++) {
+      const [key, val] = entries[i];
+      totalSize += new TextEncoder().encode(`"${key}"`).length; // Key with quotes
+      totalSize += 1; // Colon
+      totalSize += calculateValueSize(val); // Value
+      if (i < entries.length - 1) {
+        totalSize += 1; // Comma separator
+      }
+    }
+    return totalSize;
+  }
+  
+  return 0;
+}
+
+/**
+ * Calculate size breakdown based on shape definition
+ */
+function calculateSizeWithShape(data: any, shape: Shape): any {
+  if (Array.isArray(data)) {
+    // For arrays, apply the shape to each element and sum the results
+    let totalSizeBreakdown: any = {};
+    let isFirstElement = true;
+    
+    for (const item of data) {
+      const itemSizeBreakdown = calculateSizeWithShape(item, shape);
+      
+      if (isFirstElement) {
+        totalSizeBreakdown = itemSizeBreakdown;
+        isFirstElement = false;
+      } else {
+        // Sum up the sizes
+        totalSizeBreakdown = addSizeBreakdowns(totalSizeBreakdown, itemSizeBreakdown);
+      }
+    }
+    
+    return totalSizeBreakdown;
+  }
+
+  const result: any = {};
+  for (const key in shape) {
+    const rule = shape[key];
+    if (data[key] === undefined) {
+      // If the key doesn't exist in data, skip it or set to 0
+      continue;
+    }
+    
+    if (rule === true) {
+      // Calculate total size of this key's value
+      result[key] = calculateValueSize(data[key]);
+    } else if (typeof rule === 'object') {
+      // Recursively break down this key's value
+      result[key] = calculateSizeWithShape(data[key], rule);
+    }
+  }
+  return result;
+}
+
+/**
+ * Helper function to add two size breakdown objects together
+ */
+function addSizeBreakdowns(breakdown1: any, breakdown2: any): any {
+  if (typeof breakdown1 === 'number' && typeof breakdown2 === 'number') {
+    return breakdown1 + breakdown2;
+  }
+  
+  if (typeof breakdown1 === 'object' && typeof breakdown2 === 'object') {
+    const result: any = {};
+    const allKeys = new Set([...Object.keys(breakdown1), ...Object.keys(breakdown2)]);
+    
+    for (const key of allKeys) {
+      const val1 = breakdown1[key] || 0;
+      const val2 = breakdown2[key] || 0;
+      result[key] = addSizeBreakdowns(val1, val2);
+    }
+    return result;
+  }
+  
+  // Handle mismatched types - prefer the non-zero value
+  return breakdown1 || breakdown2 || 0;
+}
+
+/**
  * Validates and processes JSON schema generation request
  */
 async function processJsonSchema(input: JsonSchemaInput): Promise<JsonSchemaResult> {
   try {
-    // Resolve and validate file path
-    const resolvedPath = resolve(input.filePath);
+    // Use strategy pattern to ingest JSON content
+    const ingestionResult = await jsonIngestionContext.ingest(input.filePath);
     
-    // Check if file exists and read it
-    let jsonContent: string;
-    try {
-      jsonContent = await fs.readFile(resolvedPath, 'utf-8');
-    } catch (error) {
+    if (!ingestionResult.success) {
+      // Map strategy errors to existing error format for backward compatibility
       return {
         success: false,
-        error: {
-          type: 'file_not_found',
-          message: `File not found: ${resolvedPath}`,
-          details: error
-        }
+        error: ingestionResult.error
       };
     }
 
-    // Validate JSON format
-    try {
-      JSON.parse(jsonContent);
-    } catch (error) {
-      return {
-        success: false,
-        error: {
-          type: 'invalid_json',
-          message: 'Invalid JSON format in file',
-          details: error
-        }
-      };
-    }
+    const jsonContent = ingestionResult.content;
+
+    // Calculate file size in bytes
+    const fileSizeBytes = new TextEncoder().encode(jsonContent).length;
 
     // Generate schema using quicktype with fixed parameters
     try {
@@ -152,7 +297,8 @@ async function processJsonSchema(input: JsonSchemaInput): Promise<JsonSchemaResu
       
       return {
         success: true,
-        schema: result.lines.join('\n')
+        schema: result.lines.join('\n'),
+        fileSizeBytes
       };
     } catch (error) {
       return {
@@ -181,34 +327,27 @@ async function processJsonSchema(input: JsonSchemaInput): Promise<JsonSchemaResu
  */
 async function processJsonFilter(input: JsonFilterInput): Promise<JsonFilterResult> {
   try {
-    // Resolve and validate file path
-    const resolvedPath = resolve(input.filePath);
+    // Use strategy pattern to ingest JSON content
+    const ingestionResult = await jsonIngestionContext.ingest(input.filePath);
     
-    // Check if file exists and read it
-    let jsonContent: string;
-    try {
-      jsonContent = await fs.readFile(resolvedPath, 'utf-8');
-    } catch (error) {
+    if (!ingestionResult.success) {
+      // Map strategy errors to existing error format for backward compatibility
       return {
         success: false,
-        error: {
-          type: 'file_not_found',
-          message: `File not found: ${resolvedPath}`,
-          details: error
-        }
+        error: ingestionResult.error
       };
     }
 
     // Parse JSON
     let parsedData: any;
     try {
-      parsedData = JSON.parse(jsonContent);
+      parsedData = JSON.parse(ingestionResult.content);
     } catch (error) {
       return {
         success: false,
         error: {
           type: 'invalid_json',
-          message: 'Invalid JSON format in file',
+          message: 'Invalid JSON format in content',
           details: error
         }
       };
@@ -218,9 +357,53 @@ async function processJsonFilter(input: JsonFilterInput): Promise<JsonFilterResu
     try {
       const filteredData = extractWithShape(parsedData, input.shape);
       
+      // Convert filtered data to JSON string to check size
+      const filteredJson = JSON.stringify(filteredData, null, 2);
+      const filteredSize = new TextEncoder().encode(filteredJson).length;
+      
+      // Define chunking threshold (400KB)
+      const CHUNK_THRESHOLD = 400 * 1024;
+      
+      // If under threshold, return all data
+      if (filteredSize <= CHUNK_THRESHOLD) {
+        return {
+          success: true,
+          filteredData
+        };
+      }
+      
+      // Calculate total chunks needed
+      const totalChunks = Math.ceil(filteredSize / CHUNK_THRESHOLD);
+      const chunkIndex = input.chunkIndex ?? 0; // Default to 0
+      
+      // Validate chunk index
+      if (chunkIndex >= totalChunks || chunkIndex < 0) {
+        return {
+          success: false,
+          error: {
+            type: 'validation_error',
+            message: `Invalid chunkIndex ${chunkIndex}. Must be between 0 and ${totalChunks - 1}`,
+            details: { chunkIndex, totalChunks }
+          }
+        };
+      }
+      
+      // Line-based chunking
+      const lines = filteredJson.split('\n');
+      const linesPerChunk = Math.ceil(lines.length / totalChunks);
+      const startLine = chunkIndex * linesPerChunk;
+      const endLine = Math.min(startLine + linesPerChunk, lines.length);
+      
+      // Extract chunk as text
+      const chunkText = lines.slice(startLine, endLine).join('\n');
+      
       return {
         success: true,
-        filteredData
+        filteredData: chunkText, // Return as string when chunking
+        chunkInfo: {
+          chunkIndex,
+          totalChunks
+        }
       };
     } catch (error) {
       return {
@@ -244,12 +427,88 @@ async function processJsonFilter(input: JsonFilterInput): Promise<JsonFilterResu
   }
 }
 
+/**
+ * Validates and processes JSON dry run request
+ */
+async function processJsonDryRun(input: JsonDryRunInput): Promise<JsonDryRunResult> {
+  try {
+    // Use strategy pattern to ingest JSON content
+    const ingestionResult = await jsonIngestionContext.ingest(input.filePath);
+    
+    if (!ingestionResult.success) {
+      // Map strategy errors to existing error format for backward compatibility
+      return {
+        success: false,
+        error: ingestionResult.error
+      };
+    }
+
+    // Parse JSON
+    let parsedData: any;
+    try {
+      parsedData = JSON.parse(ingestionResult.content);
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          type: 'invalid_json',
+          message: 'Invalid JSON format in content',
+          details: error
+        }
+      };
+    }
+
+    // Calculate size breakdown based on shape
+    try {
+      const sizeBreakdown = calculateSizeWithShape(parsedData, input.shape);
+      
+      // Calculate total size of the entire parsed data
+      const totalSize = calculateValueSize(parsedData);
+      
+      // Calculate filtered data size
+      const filteredData = extractWithShape(parsedData, input.shape);
+      const filteredJson = JSON.stringify(filteredData, null, 2);
+      const filteredSize = new TextEncoder().encode(filteredJson).length;
+      
+      // Calculate recommended chunks (400KB threshold)
+      const CHUNK_THRESHOLD = 400 * 1024;
+      const recommendedChunks = Math.ceil(filteredSize / CHUNK_THRESHOLD);
+      
+      return {
+        success: true,
+        sizeBreakdown,
+        totalSize,
+        filteredSize,
+        recommendedChunks
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          type: 'validation_error',
+          message: 'Failed to calculate size breakdown',
+          details: error
+        }
+      };
+    }
+  } catch (error) {
+    return {
+      success: false,
+      error: {
+        type: 'validation_error',
+        message: 'Unexpected error during processing',
+        details: error
+      }
+    };
+  }
+}
+
 // Register JSON schema tool
 server.tool(
     "json_schema",
-    "Generate TypeScript schema for a JSON file. Provide the file path as the only parameter.",
+    "Generate TypeScript schema for a JSON file or remote JSON URL. Provide the file path or HTTP/HTTPS URL as the only parameter.",
     {
-        filePath: z.string().describe("JSON file path to generate schema")
+        filePath: z.string().describe("JSON file path (local) or HTTP/HTTPS URL to generate schema from")
     },
     async ({ filePath }) => {
         try {
@@ -259,11 +518,20 @@ server.tool(
             const result = await processJsonSchema(validatedInput);
             
             if (result.success) {
+                // Format file size for display
+                const formatFileSize = (bytes: number): string => {
+                    if (bytes < 1024) return `${bytes} bytes`;
+                    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+                    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+                };
+
+                const fileSizeInfo = `// File size: ${formatFileSize(result.fileSizeBytes)} (${result.fileSizeBytes} bytes)\n\n`;
+                
                 return {
                     content: [
                         {
                             type: "text",
-                            text: result.schema
+                            text: fileSizeInfo + result.schema
                         }
                     ]
                 };
@@ -294,9 +562,9 @@ server.tool(
 
 server.tool(
     "json_filter",
-    "Filter JSON data using a shape object to extract only the fields you want. Provide filePath and shape parameters.",
+    "Filter JSON data using a shape object to extract only the fields you want. Provide filePath (local file or HTTP/HTTPS URL) and shape parameters.",
     {
-        filePath: z.string().describe("Path to the JSON file to filter"),
+        filePath: z.string().describe("Path to the JSON file (local) or HTTP/HTTPS URL to filter"),
         shape: z.unknown().describe(`Shape object (formatted as valid JSON) defining what fields to extract. Use 'true' to include a field, or nested objects for deep extraction.
 
 Examples:
@@ -326,9 +594,11 @@ Examples:
 Note: 
 - Arrays are automatically handled - the shape is applied to each item in the array.
 - Use json_schema tool to analyse the JSON file schema before using this tool.
-`)
+- Use json_dry_run tool to get a size breakdown of your desired json shape before using this tool.
+`),
+        chunkIndex: z.number().optional().describe("Index of chunk to retrieve (0-based). If filtered data exceeds 400KB, it will be automatically chunked. Defaults to 0 if not specified.")
     },
-    async ({ filePath, shape }) => {
+    async ({ filePath, shape, chunkIndex }) => {
         try {
             // If shape is a string, parse it as JSON
             let parsedShape = shape;
@@ -352,17 +622,139 @@ Note:
 
             const validatedInput = JsonFilterInputSchema.parse({
                 filePath,
-                shape: parsedShape
+                shape: parsedShape,
+                chunkIndex
             });
             
             const result = await processJsonFilter(validatedInput);
             
             if (result.success) {
+                // Check if chunking is active
+                if (result.chunkInfo) {
+                    // Return chunk data + metadata as separate content items
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: result.filteredData // This is already a string when chunking
+                            },
+                            {
+                                type: "text",
+                                text: JSON.stringify(result.chunkInfo)
+                            }
+                        ]
+                    };
+                } else {
+                    // No chunking - return as normal JSON
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: JSON.stringify(result.filteredData, null, 2)
+                            }
+                        ]
+                    };
+                }
+            } else {
                 return {
                     content: [
                         {
                             type: "text",
-                            text: JSON.stringify(result.filteredData, null, 2)
+                            text: `Error: ${result.error.message}`
+                        }
+                    ],
+                    isError: true
+                };
+            }
+        } catch (error) {
+            return {
+                content: [
+                    {
+                        type: "text",
+                        text: `Validation error: ${error instanceof Error ? error.message : String(error)}`
+                    }
+                ],
+                isError: true
+            };
+        }
+    }
+);
+
+server.tool(
+    "json_dry_run",
+    "Analyze the size breakdown of JSON data using a shape object to determine granularity. Returns size information in bytes for each specified field, mirroring the shape structure but with size values instead of data.",
+    {
+        filePath: z.string().describe("Path to the JSON file (local) or HTTP/HTTPS URL to analyze"),
+        shape: z.unknown().describe(`Shape object (formatted as valid JSON) defining what to analyze for size. Use 'true' to get total size of a field, or nested objects for detailed breakdown.
+
+Examples:
+1. Get size of single field: {"name": true}
+2. Get sizes of multiple fields: {"name": true, "email": true, "age": true}
+3. Get detailed breakdown: {"user": {"name": true, "profile": {"bio": true}}}
+4. Analyze arrays: {"posts": {"title": true, "content": true}} - gets total size of all matching elements
+5. Complex analysis: {
+   "metadata": true,
+   "users": {
+     "name": true,
+     "settings": {
+       "theme": true
+     }
+   },
+   "posts": {
+     "title": true,
+     "tags": true
+   }
+}
+
+Note: 
+- Returns size in bytes for each specified field
+- Output structure mirrors the shape but with size values
+- Array analysis returns total size of all matching elements
+- Use json_schema tool to understand the JSON structure first`)
+    },
+    async ({ filePath, shape }) => {
+        try {
+            // If shape is a string, parse it as JSON
+            let parsedShape = shape;
+            if (typeof shape === 'string') {
+                try {
+                    parsedShape = JSON.parse(shape);
+                } catch (e) {
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: `Error: Invalid JSON in shape parameter: ${e instanceof Error ? e.message : String(e)}`
+                            }
+                        ],
+                        isError: true
+                    };
+                }
+            }
+
+            const validatedInput = JsonDryRunInputSchema.parse({
+                filePath,
+                shape: parsedShape
+            });
+            
+            const result = await processJsonDryRun(validatedInput);
+            
+            if (result.success) {
+                // Format the response with total size and breakdown
+                const formatSize = (bytes: number): string => {
+                    if (bytes < 1024) return `${bytes} bytes`;
+                    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+                    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+                };
+
+                const header = `Total file size: ${formatSize(result.totalSize)} (${result.totalSize} bytes)\nFiltered size: ${formatSize(result.filteredSize)} (${result.filteredSize} bytes)\nRecommended chunks: ${result.recommendedChunks}\n\nSize breakdown:\n`;
+                const breakdown = JSON.stringify(result.sizeBreakdown, null, 2);
+                
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: header + breakdown
                         }
                     ]
                 };
