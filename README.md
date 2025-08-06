@@ -2,7 +2,11 @@
 
 A powerful Model Context Protocol (MCP) server that provides JSON schema generation and filtering tools for local files and remote HTTP/HTTPS endpoints. Built with [quicktype](https://github.com/quicktype/quicktype) for robust TypeScript type generation.
 
+<a href="https://glama.ai/mcp/servers/@kehvinbehvin/json-mcp">
+  <img width="380" height="200" src="https://glama.ai/mcp/servers/@kehvinbehvin/json-mcp/badge" alt="JSON Server MCP server" />
+
 **Perfect for**: Filtering large JSON files and API responses to extract only relevant data for LLM context, while maintaining type safety.
+
 
 ## ✨ Key Features
 
